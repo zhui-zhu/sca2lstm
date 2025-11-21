@@ -41,13 +41,28 @@ STATIC_REF_RANGE = {
 
 # 时序指标物理硬约束(统计数据适用 CAMELS_GB 数据集，英国地区)
 TS_PHYSICAL_CONSTRAINTS = {
-    "precipitation": (0, 200),   # 日降水0-200mm（沿海可放宽至800）
+    "precipitation": (0, 200),   # 日降水0-200mm（英国沿海极端值）
     "peti": (0, 15),             # 日蒸散发0-15mm   
     "temperature": (-10, 40),    # 日温-10~40℃
-    "discharge_vol": (0, 1000)     # 流量0-1000m³/s
+    "discharge_vol": (0, 1000),   # 流量0-1000m³/s
+    # 新增衍生指标物理约束（基于CAMELS_GB数据集统计）
+    "high_prec_running_days": (0, 15),  # 连续高降水最多15天
+    "low_prec_running_days": (0, 60),   # 连续低降水最多60天
+    "prec_7day_sum": (0, 500),          # 7天累计降水0-500mm
+    "prec_30day_sum": (0, 1000)         # 30天累计降水0-1000mm
 }
 
-# ======================== 核心工具函数 ========================
+# ======================== 核心工具函数 =======================
+def get_ssi(flow_series, window=30):
+    """用原始流量生成1维旱涝场景（0=旱期，0.5=正常，1=涝期）——方案1核心"""
+    # 30天滚动窗口算均值和标准差（基于原始流量，有物理意义）
+    mean_flow = flow_series.rolling(window=window, min_periods=7).mean()  # 至少7个有效数据才计算
+    std_flow = flow_series.rolling(window=window, min_periods=7).std()
+    # 计算偏离度（避免除以0）
+    ssi = (flow_series - mean_flow) / (std_flow + 1e-8)
+    # 贴标签（固定阈值，基于物理意义的偏离度）
+    return np.where(ssi < -1.5, 0, np.where(ssi > 1.5, 1, 0.5)).reshape(-1, 1)
+
 def fill_timeseries_nan(series: pd.Series, is_extreme_context: pd.Series = None) -> pd.Series:
     """时序指标缺失值填充"""
     series_filled = series.copy()
@@ -101,11 +116,11 @@ def handle_timeseries_outliers(series: pd.Series, indicator: str, catchment_id: 
     if len(valid_data) < 10: # 数据不足10天，不处理
         return series_clean
 
-    # 物理硬约束
-    min_phys, max_phys = TS_PHYSICAL_CONSTRAINTS[indicator]
+    # 物理硬约束（新增衍生指标的约束）
+    min_phys, max_phys = TS_PHYSICAL_CONSTRAINTS.get(indicator, (series.min(), series.max()))
     series_clean = np.clip(series_clean, min_phys, max_phys)
 
-    # 流域自适应阈值（历史最大×1.2）
+    # 流域自适应阈值（历史最大×1.2，衍生指标同样适用）
     historical_max = valid_data.max()
     adaptive_thresh = historical_max * 1.2
     series_clean = np.where(
@@ -117,32 +132,49 @@ def handle_timeseries_outliers(series: pd.Series, indicator: str, catchment_id: 
     print(f"流域{catchment_id}-{indicator}：历史最大={historical_max:.2f}，自适应阈值={adaptive_thresh:.2f}")
     return series_clean
 
-def calculate_dynamic_features(ts_data: pd.DataFrame) -> pd.DataFrame:
-    """计算时序衍生指标"""
+def calculate_dynamic_features(ts_data: pd.DataFrame, catchment_id: int) -> pd.DataFrame:
+    """优化后的时序衍生指标计算（适配CAMELS_GB数据集）"""
     ts_data = ts_data.copy()
     # 避免重复计算衍生列（如果已存在则跳过）
     dynamic_cols = ["high_prec_running_days", "low_prec_running_days", "prec_7day_sum", "prec_30day_sum"]
+    existing_dynamic_cols = [col for col in dynamic_cols if col in ts_data.columns]
+    if existing_dynamic_cols:
+        print(f"⚠️  已存在衍生指标：{existing_dynamic_cols}，将覆盖计算")
 
-    # 高降水持续天数
-    daily_mean_prec = ts_data["precipitation"].dropna().mean()
-    high_prec_thresh = daily_mean_prec * 3 # 高降水阈值（3倍日降水均值）
+    # 基于当前流域原始降水的分位数设定阈值（更科学，适配不同流域）
+    valid_prec = ts_data["precipitation"].dropna()
+    if len(valid_prec) < 30:  # 降水数据不足30天，用固定阈值兜底
+        high_prec_thresh = 10  # 英国流域高降水阈值默认10mm
+        low_prec_thresh = 1    # 低降水阈值默认1mm
+        print(f"⚠️  流域{catchment_id}降水数据不足30天，使用固定阈值（高=10mm，低=1mm）")
+    else:
+        high_prec_thresh = valid_prec.quantile(0.9)  # 90分位数为高降水阈值
+        low_prec_thresh = valid_prec.quantile(0.1)   # 10分位数为低降水阈值
+        print(f"✅ 流域{catchment_id}降水阈值：高={high_prec_thresh:.2f}mm，低={low_prec_thresh:.2f}mm")
+
+    # 1. 高降水持续天数（连续≥高降水阈值的天数）
     ts_data["is_high_prec"] = (ts_data["precipitation"] >= high_prec_thresh).astype(int)
-    ts_data["high_prec_running_days"] = ts_data["is_high_prec"].groupby(
-        (ts_data["is_high_prec"] != ts_data["is_high_prec"].shift()).cumsum()
-    ).cumsum() * ts_data["is_high_prec"]
+    # 连续序列分组：当当前状态与前一天不同时，生成新分组
+    high_prec_groups = (ts_data["is_high_prec"] != ts_data["is_high_prec"].shift(1)).cumsum()
+    # 分组内累计计数，非高降水日置0
+    ts_data["high_prec_running_days"] = ts_data.groupby(high_prec_groups)["is_high_prec"].cumcount() + 1
+    ts_data["high_prec_running_days"] = ts_data["high_prec_running_days"] * ts_data["is_high_prec"]
 
-    # 干旱持续天数
-    ts_data["is_low_prec"] = (ts_data["precipitation"] < 1).astype(int) # 干旱阈值（1mm）
-    ts_data["low_prec_running_days"] = ts_data["is_low_prec"].groupby(
-        (ts_data["is_low_prec"] != ts_data["is_low_prec"].shift()).cumsum()
-    ).cumsum() * ts_data["is_low_prec"]
+    # 2. 低降水持续天数（连续≤低降水阈值的天数）
+    ts_data["is_low_prec"] = (ts_data["precipitation"] <= low_prec_thresh).astype(int)
+    low_prec_groups = (ts_data["is_low_prec"] != ts_data["is_low_prec"].shift(1)).cumsum()
+    ts_data["low_prec_running_days"] = ts_data.groupby(low_prec_groups)["is_low_prec"].cumcount() + 1
+    ts_data["low_prec_running_days"] = ts_data["low_prec_running_days"] * ts_data["is_low_prec"]
 
-    # 累计降水
+    # 3. 7天累计降水（滑动窗口，最小1天有效数据）
     ts_data["prec_7day_sum"] = ts_data["precipitation"].rolling(window=7, min_periods=1).sum()
+
+    # 4. 30天累计降水（滑动窗口，最小7天有效数据，避免前期失真）
     ts_data["prec_30day_sum"] = ts_data["precipitation"].rolling(window=30, min_periods=7).sum()
 
     # 删除中间列
     ts_data = ts_data.drop(columns=["is_high_prec", "is_low_prec"], errors="ignore")
+    print(f"✅ 衍生指标计算完成：{dynamic_cols}")
     return ts_data
 
 def normalize_static_feature(value: float, feature_name: str) -> float:
@@ -283,7 +315,7 @@ def fill_discharge_nan(ts_data: pd.DataFrame) -> pd.DataFrame:
     ts_data["discharge_vol"] = discharge
     return ts_data
 
-# ======================== 单流域处理主函数 ========================
+# ======================== 单流域处理主函数（核心修改处）=======================
 def preprocess_single_catchment(catchment_id: int):
     catchment_output_dir = os.path.join(OUTPUT_DIR, str(catchment_id))
     os.makedirs(catchment_output_dir, exist_ok=True)
@@ -304,67 +336,84 @@ def preprocess_single_catchment(catchment_id: int):
     used_ts_cols = [col for col in required_ts_cols if col in ts_df.columns]
     ts_data = ts_df[used_ts_cols].copy()
 
-    # 日期格式化+
+    # 日期格式化+去重
     ts_data["date"] = pd.to_datetime(ts_data["date"], errors="coerce")
     ts_data = ts_data.dropna(subset=["date"]).drop_duplicates("date").reset_index(drop=True)
     print(f"✅ 时序数据读取完成：{len(ts_data)} 条记录")
 
-    # ---------------------- 步骤2：时序数据预处理 ----------------------
+    # ---------------------- 步骤2：时序数据预处理（缺失值+异常值）----------------------
     # 定义极端事件上下文（90%以上降水为极端事件）
     extreme_prec_thresh = ts_data["precipitation"].dropna().quantile(0.9) if "precipitation" in ts_data.columns else 0
     is_extreme_context = ts_data["precipitation"] >= extreme_prec_thresh if "precipitation" in ts_data.columns else pd.Series(False, index=ts_data.index)
 
-    # 缺失值填充
+    # 缺失值填充（先填充基础时序指标）
     for col in ["precipitation", "peti", "temperature"]:
         if col in ts_data.columns:
             ts_data[col] = fill_timeseries_nan(ts_data[col], is_extreme_context)
             print(f"✅ {col}缺失值填充完成")
 
-    # 流量缺失值填充
+    # 流量缺失值填充（SSI基于流量计算，必须先填充）
     if "discharge_vol" in ts_data.columns:
         ts_data = fill_discharge_nan(ts_data)
         print(f"✅ 流量缺失值填充完成")
 
-    # 异常值处理
+    # 异常值处理（基础时序指标）
     ts_num_cols = [col for col in used_ts_cols if col != "date"]
     for col in ts_num_cols:
         if col in TS_PHYSICAL_CONSTRAINTS:
             ts_data[col] = handle_timeseries_outliers(ts_data[col], col, catchment_id)
-    print(f"✅ 时序异常值处理完成")
+    print(f"✅ 基础时序指标异常值处理完成")
 
-    # ---------------------- 步骤3：计算时序衍生指标 ----------------------
+    # ---------------------- 步骤3：计算4个衍生指标（核心修改）----------------------
     dynamic_cols = []
     if "precipitation" in ts_data.columns:
-        ts_data = calculate_dynamic_features(ts_data)
+        # 传入流域ID，便于日志和阈值适配
+        ts_data = calculate_dynamic_features(ts_data, catchment_id)
         dynamic_cols = ["high_prec_running_days", "low_prec_running_days", "prec_7day_sum", "prec_30day_sum"]
         dynamic_cols = [col for col in dynamic_cols if col in ts_data.columns]  # 过滤实际存在的衍生列
-        print(f"✅ 衍生指标计算完成：{dynamic_cols}")
+        
+        # 衍生指标异常值处理（新增）
+        for col in dynamic_cols:
+            if col in TS_PHYSICAL_CONSTRAINTS:
+                ts_data[col] = handle_timeseries_outliers(ts_data[col], col, catchment_id)
+        print(f"✅ 衍生指标计算+异常值处理完成：{dynamic_cols}")
     else:
         print(f"⚠️  无降水数据，未计算衍生指标")
 
-    # ---------------------- 步骤4：时序指标归一化 ----------------------
+    # ---------------------- 步骤4：计算SSI旱涝场景 ----------------------
+    if "discharge_vol" in ts_data.columns:
+        # 用预处理后的原始流量（已填充缺失值、处理异常值）计算SSI
+        ssi = get_ssi(ts_data["discharge_vol"], window=30)
+        ts_data["ssi"] = ssi  # 添加SSI列（值为0/0.5/1，基于原始流量）
+        dynamic_cols.append("ssi")  # 将SSI纳入时序特征，后续一起归一化
+        print(f"✅ SSI旱涝场景计算完成（基于原始流量）：0=旱期，0.5=正常期，1=涝期")
+    else:
+        print(f"⚠️  无流量数据，未计算SSI")
+
+    # ---------------------- 步骤5：时序指标归一化（包含衍生指标+SSI）----------------------
+    # 所有时序特征：基础指标 + 衍生指标 + SSI
     all_ts_cols = list(set(ts_num_cols + dynamic_cols))  # 去重
     all_ts_cols = [col for col in all_ts_cols if col in ts_data.columns]  # 确保列存在
     ts_scaler_params = {}
-    ts_normalized = pd.DataFrame(index=ts_data.index)  # 明确索引
+    ts_normalized = pd.DataFrame(index=ts_data.index)  # 保持索引一致
 
     for col in all_ts_cols:
         min_val = ts_data[col].min()
         max_val = ts_data[col].max()
         ts_scaler_params[col] = {"min": float(min_val), "max": float(max_val)}
-        # 归一化
+        # Min-Max归一化（与原有逻辑一致）
         if max_val - min_val < 1e-8:
             ts_normalized[col] = 0.5
         else:
             ts_normalized[col] = (ts_data[col] - min_val) / (max_val - min_val)
 
-    # 保存时序缩放器
+    # 保存时序缩放器（包含衍生指标和SSI的缩放参数）
     ts_scaler_path = os.path.join(catchment_output_dir, f"ts_scaler_{catchment_id}.json")
     with open(ts_scaler_path, "w") as f:
         json.dump(ts_scaler_params, f, indent=2)
-    print(f"✅ 时序归一化完成，缩放器保存至：{ts_scaler_path}")
+    print(f"✅ 时序归一化完成（含{len(all_ts_cols)}个指标：基础+衍生+SSI），缩放器保存至：{ts_scaler_path}")
 
-    # ---------------------- 步骤5：静态数据预处理 ----------------------
+    # ---------------------- 步骤6：静态数据预处理 ----------------------
     static_raw = load_static_data_complete(catchment_id)
     static_cols = list(STATIC_REF_RANGE.keys())
     static_processed = pd.DataFrame(index=[0])  # 明确索引
@@ -385,12 +434,12 @@ def preprocess_single_catchment(catchment_id: int):
         json.dump(STATIC_REF_RANGE, f, indent=2)
     print(f"✅ 静态数据归一化完成，参考范围保存至：{static_scaler_path}")
 
-    # ---------------------- 步骤6：数据融合（关键修复：避免列名重复） ----------------------
+    # ---------------------- 步骤7：数据融合 ----------------------
     # 1. 收集所有要拼接的DataFrame
     date_df = ts_data[["date"]].copy()
     catchment_df = pd.DataFrame({"catchment_id": [catchment_id]*len(ts_data)})
 
-    # 2. 检查所有列名是否重复
+    # 2. 检查所有列名是否重复（避免时序列与静态列冲突）
     all_cols = (
         date_df.columns.tolist() +
         ts_normalized.columns.tolist() +
@@ -399,46 +448,40 @@ def preprocess_single_catchment(catchment_id: int):
     )
     duplicate_cols = [col for col in set(all_cols) if all_cols.count(col) > 1]
     if duplicate_cols:
-        print(f"⚠️  发现重复列名：{duplicate_cols}，自动重命名")
-        # 重命名重复列（给静态列添加前缀"static_"）
+        print(f"⚠️  发现重复列名：{duplicate_cols}，自动给静态列添加前缀")
+        # 重命名静态列（添加"static_"前缀，避免与时序列冲突）
         static_processed = static_processed.rename(columns={col: f"static_{col}" for col in duplicate_cols if col in static_processed.columns})
-        # 给时序列添加前缀"ts_"（如果仍有重复）
-        remaining_dups = [col for col in set(
-            date_df.columns.tolist() + ts_normalized.columns.tolist() + static_processed.columns.tolist() + catchment_df.columns.tolist()
-        ) if all_cols.count(col) > 1]
-        if remaining_dups:
-            ts_normalized = ts_normalized.rename(columns={col: f"ts_{col}" for col in remaining_dups if col in ts_normalized.columns})
 
-    # 3. 静态数据重复到时序长度
+    # 3. 静态数据重复到时序长度（保持索引一致）
     static_repeated = pd.DataFrame(
         np.tile(static_processed.values, (len(ts_data), 1)),
         columns=static_processed.columns,
-        index=ts_data.index  # 确保索引一致
+        index=ts_data.index
     )
 
-    # 4. 拼接所有数据（添加verify_integrity=True便于调试）
+    # 4. 拼接所有数据
     try:
         final_data = pd.concat([
             date_df,
-            ts_normalized,
-            static_repeated,
+            ts_normalized,  # 包含归一化后的基础时序、衍生指标、SSI
+            static_repeated,  # 归一化后的静态指标（带前缀）
             catchment_df
         ], axis=1, verify_integrity=True)
     except ValueError as e:
         print(f"❌ 拼接失败：{str(e)}")
-        print(f"当前各部分列名：")
+        print(f"各部分列名：")
         print(f"- 日期列：{date_df.columns.tolist()}")
-        print(f"- 时序列：{ts_normalized.columns.tolist()}")
+        print(f"- 时序列（含衍生+SSI）：{ts_normalized.columns.tolist()}")
         print(f"- 静态列：{static_repeated.columns.tolist()}")
         print(f"- 流域ID列：{catchment_df.columns.tolist()}")
         raise e
 
-    # ---------------------- 步骤7：保存最终结果 ----------------------
+    # ---------------------- 步骤8：保存最终结果 ----------------------
     final_output_path = os.path.join(catchment_output_dir, f"model_input_{catchment_id}.csv")
     final_data.to_csv(final_output_path, index=False, na_rep="NaN")
     print(f"✅ 最终数据保存至：{final_output_path}")
     print(f"📊 数据维度：{final_data.shape}（时间步×指标数）")
-    print(f"📋 包含指标：{len(ts_normalized.columns)}个时序指标 + {len(static_repeated.columns)}个静态指标")
+    print(f"📋 包含指标：{len(ts_normalized.columns)}个时序指标（{len(ts_num_cols)}基础+{len(dynamic_cols)}衍生/SSI） + {len(static_repeated.columns)}个静态指标")
 
     print(f"{'='*50} 流域 {catchment_id} 处理完成 {'='*50}\n")
 
