@@ -210,15 +210,15 @@ class HydrologyDataset(Dataset):
 
     def _get_lstm1_input(self, df_seq: pd.DataFrame) -> np.ndarray:
         lstm1_inputs = []
-        time_encoding = self._get_time_encoding(df_seq["date"])
-        lstm1_inputs.append(time_encoding)
+        # time_encoding = self._get_time_encoding(df_seq["date"])
+        # lstm1_inputs.append(time_encoding)
         
         derived_feats = df_seq[self.lstm1_derived_feats].values.astype(np.float32)
         lstm1_inputs.append(derived_feats)
         
-        lstm2_features_data = df_seq[self.lstm2_features]
-        missing_bool = (~np.isnan(lstm2_features_data.values)).astype(np.float32)
-        lstm1_inputs.append(missing_bool)
+        # lstm2_features_data = df_seq[self.lstm2_features]
+        # missing_bool = (~np.isnan(lstm2_features_data.values)).astype(np.float32)
+        # lstm1_inputs.append(missing_bool)
         
         # 添加LSTM2反馈残差（初始化为0）
         seq_len = len(df_seq)

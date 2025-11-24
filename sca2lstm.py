@@ -632,7 +632,7 @@ def train_sca2lstm(config, use_parallel=True, use_multithreading=True):
     # 权重分析
     print(f"\n{'='*30} 模型权重分析 {'='*30}")
     try:
-        checkpoint = torch.load(best_model_path)
+        checkpoint = torch.load(best_model_path, weights_only=False, map_location=config.DEVICE)
         model.load_state_dict(checkpoint['model_state_dict'])
         model.eval()
         
