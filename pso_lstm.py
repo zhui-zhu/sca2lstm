@@ -399,9 +399,9 @@ def plot_prediction_comparison(dates, actual, predicted, basin_id, lead_time, st
     else:
         time_range_info += f" (All Data: {len(filtered_dates)} data points)"
     
-    plt.figtext(0.5, 0.02, time_range_info, ha='center', fontsize=10, style='italic')
+    plt.figtext(0.5, 0.01, time_range_info, ha='center', fontsize=10, style='italic')
     
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0.03, 1, 1])  # 调整布局，为底部文本留出空间
     
     # 保存图片（在show之前保存）
     if save_path:

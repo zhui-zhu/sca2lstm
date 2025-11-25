@@ -3,6 +3,7 @@ import pandas as pd
 from typing import Union, Tuple, List
 import json
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 import torch
 import warnings
 import os
@@ -1191,7 +1192,7 @@ def plot_training_curves(train_losses, val_losses, save_dir=None, show_plot=Fals
         print(f"❌ 绘制损失曲线失败: {str(e)}")
 
 
-def plot_prediction_comparison(pred_values, target_values, basin_ids=None, epoch=None, save_dir=None, sample_size=50):
+def plot_prediction_comparison(pred_values, target_values, basin_ids=None, epoch=None, save_dir=None, sample_size=50, start_date=None, end_date=None):
     """
     绘制预测值与真实值的对比图
     
@@ -1209,22 +1210,68 @@ def plot_prediction_comparison(pred_values, target_values, basin_ids=None, epoch
         保存图像的目录
     sample_size : int, default=50
         显示的样本数量
+    start_date : str, optional
+        绘制开始日期，格式为'YYYY-MM-DD'，默认为'2000-01-01'
+    end_date : str, optional
+        绘制结束日期，格式为'YYYY-MM-DD'，默认为'2000-12-31'
     """
     try:
         if len(pred_values) == 0 or len(target_values) == 0:
             print("⚠️  没有预测数据可供可视化")
             return
         
+        # 设置默认日期范围
+        if start_date is None:
+            start_date = '2000-01-01'
+        if end_date is None:
+            end_date = '2000-12-31'
+            
+        # 转换为datetime对象
+        start_date = pd.to_datetime(start_date)
+        end_date = pd.to_datetime(end_date)
+        
         # 转换为numpy数组并取前sample_size个样本
         pred_array = np.array(pred_values)[:sample_size]
         target_array = np.array(target_values)[:sample_size]
         
+        # 创建日期序列
+        total_days = (end_date - start_date).days + 1
+        if total_days <= sample_size:
+            # 如果日期范围小于样本数量，使用实际日期范围
+            dates = pd.date_range(start=start_date, end=end_date)
+            # 调整样本大小以匹配日期数量
+            pred_array = pred_array[:len(dates)]
+            target_array = target_array[:len(dates)]
+        else:
+            # 如果日期范围大于样本数量，均匀采样日期
+            dates = pd.date_range(start=start_date, end=end_date, periods=len(pred_array))
+        
         plt.figure(figsize=(12, 5))
         
         # 绘制对比图
-        sample_indices = range(len(pred_array))
-        plt.plot(sample_indices, target_array, 'b-', label='True Values', linewidth=2, marker='o', markersize=4)
-        plt.plot(sample_indices, pred_array, 'r--', label='Predictions', linewidth=2, marker='s', markersize=4)
+        plt.plot(dates, target_array, 'b-', label='True Values', linewidth=2, marker='o', markersize=4)
+        plt.plot(dates, pred_array, 'r--', label='Predictions', linewidth=2, marker='s', markersize=4)
+        
+        # 根据数据点数量自动调整x轴标签显示频率
+        n_points = len(dates)
+        if n_points <= 30:
+            # 数据点少，显示所有日期
+            plt.gca().xaxis.set_major_locator(mdates.DayLocator(interval=max(1, n_points//10)))
+            date_format = '%Y-%m-%d'
+        elif n_points <= 90:
+            # 中等数量，每周显示一个日期
+            plt.gca().xaxis.set_major_locator(mdates.WeekdayLocator(byweekday=mdates.MO))
+            date_format = '%m-%d'
+        elif n_points <= 365:
+            # 大量数据，每月显示一个日期
+            plt.gca().xaxis.set_major_locator(mdates.MonthLocator())
+            date_format = '%m-%d'
+        else:
+            # 超多数据，每季度显示一个日期
+            plt.gca().xaxis.set_major_locator(mdates.MonthLocator(interval=3))
+            date_format = '%Y-%m'
+            
+        plt.gca().xaxis.set_major_formatter(mdates.DateFormatter(date_format))
         
         # 添加标题信息
         title = 'Prediction vs True Values Comparison'
@@ -1235,10 +1282,13 @@ def plot_prediction_comparison(pred_values, target_values, basin_ids=None, epoch
             title += f'\nBasins: {", ".join(map(str, unique_basins))}'
         
         plt.title(title, fontsize=14, fontweight='bold')
-        plt.xlabel('Sample Index', fontsize=12)
-        plt.ylabel('Discharge Value', fontsize=12)
+        plt.xlabel('Date', fontsize=12)
+        plt.ylabel('Discharge (m³/s)', fontsize=12)
         plt.legend(fontsize=10)
         plt.grid(True, alpha=0.3)
+        
+        # 自动旋转日期标签以避免重叠
+        plt.gcf().autofmt_xdate()
         
         # 计算并显示误差指标
         if len(pred_array) == len(target_array):
@@ -1248,7 +1298,11 @@ def plot_prediction_comparison(pred_values, target_values, basin_ids=None, epoch
                     transform=plt.gca().transAxes, fontsize=10,
                     verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
         
-        plt.tight_layout()
+        # 添加时间范围信息
+        date_range_text = f'Time Range: {start_date.strftime("%Y-%m-%d")} to {end_date.strftime("%Y-%m-%d")}'
+        plt.figtext(0.5, 0.01, date_range_text, ha='center', fontsize=10)
+        
+        plt.tight_layout(rect=[0, 0.03, 1, 1])  # 为底部文本留出空间
         
         if save_dir:
             os.makedirs(save_dir, exist_ok=True)
