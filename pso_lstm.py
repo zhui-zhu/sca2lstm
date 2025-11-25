@@ -46,6 +46,14 @@ def bias_pct(obs, sim):
         return np.nan
     return float((np.sum(sim - obs) / s_obs) * 100.0)
 
+def bias_pct(obs, sim):
+    obs = np.asarray(obs).flatten()
+    sim = np.asarray(sim).flatten()
+    s_obs = np.sum(obs)
+    if s_obs == 0:
+        return np.nan
+    return float((np.sum(sim - obs) / s_obs) * 100.0)
+
 def log(level: str, message: str):
     """简单的日志函数"""
     timestamp = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -53,13 +61,14 @@ def log(level: str, message: str):
 
 # ------------------------- 数据加载函数 -------------------------
 
-def load_discharge_data(basin_id: str = "22001") -> np.ndarray:
+def load_discharge_data(basin_id: str = "22001") -> Tuple[np.ndarray, pd.DatetimeIndex]:
     """
-    直接从CSV文件加载指定流域的discharge_vol数据
+    直接从CSV文件加载指定流域的discharge_vol数据和日期信息
     Args:
         basin_id: 流域ID, 默认为22001
     Returns:
         discharge_series: discharge_vol时间序列数据
+        dates: 对应的日期索引
     """
     csv_path = f"./datasets/CAMELS_GB/CAMELS_GB_timeseries/CAMELS_GB_hydromet_timeseries_{basin_id}_19701001-20150930.csv"
     
@@ -70,8 +79,9 @@ def load_discharge_data(basin_id: str = "22001") -> np.ndarray:
     df = pd.read_csv(csv_path, parse_dates=['date'])
     df = df.sort_values('date')  # 按时间排序
     
-    # 提取discharge_vol列
+    # 提取discharge_vol列和日期
     discharge_series = df['discharge_vol'].values
+    dates = pd.DatetimeIndex(df['date'])
     
     # 检查缺失值
     if np.isnan(discharge_series).any():
@@ -79,7 +89,7 @@ def load_discharge_data(basin_id: str = "22001") -> np.ndarray:
         # 简单的前向填充处理缺失值
         discharge_series = pd.Series(discharge_series).ffill().values
     
-    return discharge_series
+    return discharge_series, dates
 
 def create_sequences(discharge_series: np.ndarray, time_steps: int, lead_time: int) -> Tuple[np.ndarray, np.ndarray]:
     """
@@ -312,6 +322,105 @@ def train_evaluate(X_train, y_train, X_val, y_val,
 
     return best_val_rmse, val_nse
 
+def plot_prediction_comparison(dates, actual, predicted, basin_id, lead_time, start_date=None, end_date=None, save_path=None):
+    """
+    绘制预测值与实际值的对比图
+    Args:
+        dates: 日期索引
+        actual: 实际值数组
+        predicted: 预测值数组  
+        basin_id: 流域ID
+        lead_time: 预测步长
+        start_date: 开始日期 (YYYY-MM-DD)
+        end_date: 结束日期 (YYYY-MM-DD)
+        save_path: 保存路径
+    """
+    # 创建图形
+    plt.figure(figsize=(15, 10))
+    
+    # 时间范围筛选
+    mask = np.ones(len(dates), dtype=bool)
+    if start_date:
+        start_dt = pd.to_datetime(start_date)
+        mask = mask & (dates >= start_dt)
+    if end_date:
+        end_dt = pd.to_datetime(end_date)
+        mask = mask & (dates <= end_dt)
+    
+    filtered_dates = dates[mask]
+    filtered_actual = actual[mask]
+    filtered_predicted = predicted[mask]
+    
+    if len(filtered_dates) == 0:
+        print("⚠️  指定时间范围内无数据，使用全部数据")
+        filtered_dates = dates
+        filtered_actual = actual
+        filtered_predicted = predicted
+    
+    # 计算评估指标
+    nse_score = nse(filtered_actual, filtered_predicted)
+    rmse_score = rmse(filtered_actual, filtered_predicted)
+    bias_score = bias_pct(filtered_actual, filtered_predicted)
+    
+    # 绘制对比图
+    plt.subplot(2, 1, 1)
+    plt.plot(filtered_dates, filtered_actual, label='Actual Discharge', color='blue', alpha=0.8, linewidth=1.5)
+    plt.plot(filtered_dates, filtered_predicted, label='Predicted Discharge', color='red', alpha=0.8, linewidth=1.5)
+    plt.title(f'Basin {basin_id} Discharge Prediction Comparison (Lead Time: {lead_time})', fontsize=14, fontweight='bold')
+    plt.ylabel('Discharge (m³/s)', fontsize=12)
+    plt.legend(fontsize=12)
+    plt.grid(True, alpha=0.3)
+    
+    # 添加指标信息
+    textstr = f'NSE: {nse_score:.4f} | RMSE: {rmse_score:.2f} | Bias: {bias_score:.2f}%'
+    props = dict(boxstyle='round', facecolor='wheat', alpha=0.8)
+    plt.text(0.02, 0.95, textstr, transform=plt.gca().transAxes, fontsize=12,
+             verticalalignment='top', bbox=props)
+    
+    # 绘制散点图
+    plt.subplot(2, 1, 2)
+    plt.scatter(filtered_actual, filtered_predicted, alpha=0.6, s=20)
+    
+    # 添加完美预测线
+    min_val = min(np.min(filtered_actual), np.min(filtered_predicted))
+    max_val = max(np.max(filtered_actual), np.max(filtered_predicted))
+    plt.plot([min_val, max_val], [min_val, max_val], 'k--', alpha=0.8, linewidth=2, label='Perfect Prediction Line')
+    
+    plt.xlabel('Actual Discharge (m³/s)', fontsize=12)
+    plt.ylabel('Predicted Discharge (m³/s)', fontsize=12)
+    plt.title(f'Predicted vs Actual Discharge Scatter Plot (NSE: {nse_score:.4f})', fontsize=14)
+    plt.legend(fontsize=12)
+    plt.grid(True, alpha=0.3)
+    
+    # 时间范围信息
+    time_range_info = f"Time Range: {filtered_dates[0].strftime('%Y-%m-%d')} to {filtered_dates[-1].strftime('%Y-%m-%d')}"
+    if start_date or end_date:
+        time_range_info += f" (Filtered: {len(filtered_dates)} data points)"
+    else:
+        time_range_info += f" (All Data: {len(filtered_dates)} data points)"
+    
+    plt.figtext(0.5, 0.02, time_range_info, ha='center', fontsize=10, style='italic')
+    
+    plt.tight_layout()
+    
+    # 保存图片（在show之前保存）
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"✅ Prediction comparison plot saved to: {save_path}")
+    
+    plt.show()
+    
+    # 打印统计信息
+    print(f"📊 Prediction Statistics:")
+    print(f"   Data Points: {len(filtered_actual)}")
+    print(f"   Actual Range: [{np.min(filtered_actual):.2f}, {np.max(filtered_actual):.2f}]")
+    print(f"   Predicted Range: [{np.min(filtered_predicted):.2f}, {np.max(filtered_predicted):.2f}]")
+    print(f"   NSE: {nse_score:.4f}")
+    print(f"   RMSE: {rmse_score:.2f}")
+    print(f"   Bias: {bias_score:.2f}%")
+    
+    return nse_score, rmse_score, bias_score
+
 # ------------------------- PSO -------------------------
 
 class Particle:
@@ -380,7 +489,7 @@ def pso_optimize(objective_func, dim, lb, ub, n_particles=15, max_iter=20, verbo
     return global_best_position, global_best_score
 
 # ------------------------- Main -------------------------
-
+# python .\pso_lstm.py --basin_id 32006 --pso_particles 10 --pso_iters 5 --epochs 30 --final_epochs 50 --plot --plot_prediction --start 2000-01-01 --end 2000-12-31
 def main():
     parser = argparse.ArgumentParser(description="PSO-LSTM for discharge_vol prediction (basin 22001)")
     parser.add_argument("--basin_id", type=str, default="22001", help="Basin ID (default: 22001)")
@@ -393,6 +502,9 @@ def main():
     parser.add_argument("--epochs", type=int, default=20, help="Training epochs (PSO phase)")
     parser.add_argument("--final_epochs", type=int, default=50, help="Final training epochs")
     parser.add_argument("--plot", action="store_true", help="Plot results")
+    parser.add_argument("--plot_prediction", action="store_true", help="绘制预测对比图")
+    parser.add_argument("--start", type=str, help="预测开始时间 (YYYY-MM-DD)")
+    parser.add_argument("--end", type=str, help="预测结束时间 (YYYY-MM-DD)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
 
     args = parser.parse_args()
@@ -412,7 +524,7 @@ def main():
 
     # 1. 加载数据
     log("INFO", f"加载流域 {args.basin_id} 的 discharge_vol 数据...")
-    discharge_series = load_discharge_data(basin_id=args.basin_id)
+    discharge_series, dates = load_discharge_data(basin_id=args.basin_id)
     log("INFO", f"数据加载完成，共 {len(discharge_series)} 个时间步")
 
     # 2. 参数优化（PSO）
@@ -499,6 +611,50 @@ def main():
 
     log("INFO", f"运行完成！最佳验证RMSE: {best_rmse:.3f}, NSE: {best_nse:.3f}")
     log("INFO", f"结果已保存至: {output_dir}")
+
+    # 5. 预测对比图（如果指定）
+    if args.plot_prediction:
+        log("INFO", "开始生成预测对比图...")
+        
+        # 加载训练好的模型进行预测
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+        # 创建最终模型
+        final_model = RunoffLSTM(time_steps=best_time_steps, hidden_size=best_hidden_size, lead_time=args.lead_time)
+        final_model.load_state_dict(torch.load(model_path, map_location=device))
+        final_model.to(device)
+        final_model.eval()
+        
+        # 创建完整序列数据用于预测
+        X_full, y_full = create_sequences(discharge_series, best_time_steps, args.lead_time)
+        
+        # 转换为tensor
+        X_tensor = torch.FloatTensor(X_full).to(device)
+        y_tensor = torch.FloatTensor(y_full).to(device)
+        
+        # 生成预测
+        with torch.no_grad():
+            y_pred_tensor = final_model(X_tensor)
+            y_pred = y_pred_tensor.cpu().numpy().flatten()
+            y_actual = y_tensor.cpu().numpy().flatten()
+        
+        # 获取对应的日期（需要调整索引以匹配预测结果）
+        pred_dates = dates[best_time_steps + args.lead_time - 1:]
+        
+        # 生成预测对比图
+        plot_save_path = os.path.join(output_dir, f"prediction_comparison_basin{args.basin_id}_lead{args.lead_time}.png")
+        plot_prediction_comparison(
+            dates=pred_dates,
+            actual=y_actual,
+            predicted=y_pred,
+            basin_id=args.basin_id,
+            lead_time=args.lead_time,
+            start_date=args.start,
+            end_date=args.end,
+            save_path=plot_save_path
+        )
+        
+        log("INFO", "预测对比图生成完成！")
 
 if __name__ == "__main__":
     main()

@@ -1,0 +1,52 @@
+python pso_lstm.py --lead_time 1 --pso_iters 10 --pso_particles 20 --epochs 30 --final_epochs 50 --plot --basin_id 22001
+
+
+basin_id:32006
+🧪 测试参数组合: time_steps=29, batch_size= 43, hidden_size= 26  Epoch 01/30 | Train Loss: 2.3065 | Val Loss: 1.8194 | Val NSE: 0.5688
+  Epoch 05/30 | Train Loss: 1.1064 | Val Loss: 1.2763 | Val NSE: 0.6975
+  Epoch 10/30 | Train Loss: 1.0862 | Val Loss: 1.2284 | Val NSE: 0.7089
+  Epoch 15/30 | Train Loss: 1.0731 | Val Loss: 1.2056 | Val NSE: 0.7143
+  Epoch 20/30 | Train Loss: 1.0711 | Val Loss: 1.1997 | Val NSE: 0.7157
+  Epoch 25/30 | Train Loss: 1.0596 | Val Loss: 1.1956 | Val NSE: 0.7166
+  Epoch 30/30 | Train Loss: 1.0569 | Val Loss: 1.1812 | Val NSE: 0.7201
+ → NSE: 0.7206
+
+basin_id:39025
+🧪 测试参数组合: time_steps=29, batch_size= 43, hidden_size= 26  Epoch 01/30 | Train Loss: 2.4531 | Val Loss: 1.6062 | Val NSE: 0.5853
+  Epoch 05/30 | Train Loss: 1.3651 | Val Loss: 1.2715 | Val NSE: 0.6717
+  Epoch 10/30 | Train Loss: 1.3596 | Val Loss: 1.2579 | Val NSE: 0.6752
+  Epoch 15/30 | Train Loss: 1.3528 | Val Loss: 1.2462 | Val NSE: 0.6782
+  Epoch 20/30 | Train Loss: 1.3492 | Val Loss: 1.2394 | Val NSE: 0.6799
+  Epoch 25/30 | Train Loss: 1.3428 | Val Loss: 1.2417 | Val NSE: 0.6794
+  Epoch 30/30 | Train Loss: 1.3370 | Val Loss: 1.2452 | Val NSE: 0.6785
+ → NSE: 0.6828
+
+basin_id:51001
+🧪 测试参数组合: time_steps=29, batch_size= 43, hidden_size= 26  Epoch 01/30 | Train Loss: 0.7992 | Val Loss: 0.5040 | Val NSE: 0.7107
+  Epoch 05/30 | Train Loss: 0.3471 | Val Loss: 0.3646 | Val NSE: 0.7908
+  Epoch 10/30 | Train Loss: 0.3358 | Val Loss: 0.3613 | Val NSE: 0.7927
+  Epoch 15/30 | Train Loss: 0.3330 | Val Loss: 0.3572 | Val NSE: 0.7950
+  Epoch 20/30 | Train Loss: 0.3291 | Val Loss: 0.3552 | Val NSE: 0.7961
+  Epoch 25/30 | Train Loss: 0.3246 | Val Loss: 0.3577 | Val NSE: 0.7947
+  Epoch 30/30 | Train Loss: 0.3208 | Val Loss: 0.3472 | Val NSE: 0.8008
+ → NSE: 0.8008
+
+basin_id:75003
+测试参数组合: time_steps=34, batch_size=  9, hidden_size=124  Epoch 01/30 | Train Loss: 97.7668 | Val Loss: 102.5994 | Val NSE: 0.7602
+  Epoch 05/30 | Train Loss: 14.3953 | Val Loss: 54.2807 | Val NSE: 0.8731
+  Epoch 10/30 | Train Loss: 13.4805 | Val Loss: 47.3156 | Val NSE: 0.8894
+  Epoch 15/30 | Train Loss: 13.3374 | Val Loss: 45.3847 | Val NSE: 0.8939
+  Epoch 20/30 | Train Loss: 13.3110 | Val Loss: 45.9170 | Val NSE: 0.8927
+  Epoch 25/30 | Train Loss: 13.0370 | Val Loss: 42.7786 | Val NSE: 0.9000
+  Epoch 30/30 | Train Loss: 12.6393 | Val Loss: 43.0965 | Val NSE: 0.8993
+ → NSE: 0.9047
+
+basin_id:79005
+🧪 测试参数组合: time_steps=29, batch_size= 43, hidden_size= 26  Epoch 01/30 | Train Loss: 120.2057 | Val Loss: 120.1785 | Val NSE: 0.1205
+  Epoch 05/30 | Train Loss: 52.5291 | Val Loss: 72.3657 | Val NSE: 0.4706
+  Epoch 10/30 | Train Loss: 48.6935 | Val Loss: 66.9081 | Val NSE: 0.5106
+  Epoch 15/30 | Train Loss: 47.7299 | Val Loss: 66.0368 | Val NSE: 0.5170
+  Epoch 20/30 | Train Loss: 47.3334 | Val Loss: 65.4853 | Val NSE: 0.5210
+  Epoch 25/30 | Train Loss: 47.1097 | Val Loss: 65.5419 | Val NSE: 0.5206
+  Epoch 30/30 | Train Loss: 46.9770 | Val Loss: 65.1957 | Val NSE: 0.5231
+ → NSE: 0.5231

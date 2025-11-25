@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 import threading
 import multiprocessing as mp
 from hydrologyDataset import HydrologyDataset, preprocess_batch_data, parallel_preprocess_batches
-from utils import get_discharge_scaler_params, denormalize_discharge, plot_training_curves, plot_prediction_comparison, plot_loss_distribution
+from utils import get_discharge_scaler_params, denormalize_discharge, plot_training_curves, plot_prediction_comparison, plot_loss_distribution, plot_nse_curves
 
 
 def load_config():
@@ -259,6 +259,10 @@ def train_one_epoch(model, dataloader, criterion, optimizer, config):
     skipped_batches = 0
     prev_residual = torch.zeros(config.BATCH_SIZE, 1).to(config.DEVICE)  # 确保初始残差是2维
     
+    # 新增：收集NSE计算数据
+    basin_predictions = {}  # {basin_id: []}
+    basin_observations = {}  # {basin_id: []}
+    
     for batch_idx, batch in enumerate(tqdm(dataloader, desc="训练epoch")):
         # 预处理批次数据
         processed = preprocess_batch_data(batch, config)
@@ -323,6 +327,15 @@ def train_one_epoch(model, dataloader, criterion, optimizer, config):
             # 计算真实损失（使用反归一化后的值）
             loss = criterion(pred_denorm_tensor, target_denorm_tensor)
             
+            # 新增：收集NSE计算数据（使用反归一化后的值）
+            for i in range(current_batch_size):
+                basin_id = basin_ids[i].item()
+                if basin_id not in basin_predictions:
+                    basin_predictions[basin_id] = []
+                    basin_observations[basin_id] = []
+                basin_predictions[basin_id].append(pred_denorm_tensor[i].item())
+                basin_observations[basin_id].append(target_denorm_tensor[i].item())
+            
         except Exception as e:
             # 如果反归一化失败，回退到使用归一化值计算损失
             print(f"⚠️  反归一化失败，使用归一化值计算损失：{str(e)}")
@@ -367,7 +380,30 @@ def train_one_epoch(model, dataloader, criterion, optimizer, config):
         print(f"⚠️  本epoch跳过了{skipped_batches}个批次（{skip_ratio:.1f}%）")
     
     avg_loss = total_loss / len(dataloader.dataset) if len(dataloader.dataset) > 0 else float('inf')
-    return avg_loss
+    
+    # 新增：计算训练NSE（每个流域单独计算后求平均）
+    train_nse = None
+    if basin_predictions:
+        basin_nses = []
+        for basin_id in basin_predictions:
+            if len(basin_predictions[basin_id]) > 0 and len(basin_observations[basin_id]) > 0:
+                pred_array = np.array(basin_predictions[basin_id])
+                obs_array = np.array(basin_observations[basin_id])
+                
+                # 计算NSE
+                obs_mean = np.mean(obs_array)
+                if obs_mean != 0 and len(obs_array) > 1:  # 避免除零和样本过少
+                    numerator = np.sum((obs_array - pred_array) ** 2)
+                    denominator = np.sum((obs_array - obs_mean) ** 2)
+                    if denominator != 0:
+                        nse = 1 - (numerator / denominator)
+                        basin_nses.append(nse)
+        
+        # 计算所有流域NSE的平均值
+        if basin_nses:
+            train_nse = np.mean(basin_nses)
+    
+    return avg_loss, train_nse
 
 def validate_one_epoch(model, dataloader, criterion, config, epoch=None):
     model.eval()
@@ -378,6 +414,10 @@ def validate_one_epoch(model, dataloader, criterion, config, epoch=None):
     
     # 新增：收集特征权重数据
     feature_weights_history = {}  # {basin_id: []}
+    
+    # 新增：收集NSE计算数据
+    basin_predictions = {}  # {basin_id: []}
+    basin_observations = {}  # {basin_id: []}
     
     prev_residual = torch.zeros(config.BATCH_SIZE, 1).to(config.DEVICE)  # 确保初始残差是2维
     
@@ -455,6 +495,25 @@ def validate_one_epoch(model, dataloader, criterion, config, epoch=None):
             
             total_loss += loss.item() * current_batch_size
             
+            # 新增：收集NSE计算数据（使用反归一化后的值）
+            try:
+                for i in range(current_batch_size):
+                    basin_id = basin_ids[i].item()
+                    if basin_id not in basin_predictions:
+                        basin_predictions[basin_id] = []
+                        basin_observations[basin_id] = []
+                    basin_predictions[basin_id].append(pred_denorm_tensor[i].item())
+                    basin_observations[basin_id].append(target_denorm_tensor[i].item())
+            except:
+                # 如果反归一化失败，使用原始值
+                for i in range(current_batch_size):
+                    basin_id = basin_ids[i].item()
+                    if basin_id not in basin_predictions:
+                        basin_predictions[basin_id] = []
+                        basin_observations[basin_id] = []
+                    basin_predictions[basin_id].append(pred[i].item())
+                    basin_observations[basin_id].append(target[i].item())
+            
             # 更新残差
             current_residual = torch.abs(pred - target) / (target + 1e-8)
             # 确保残差是2维（batch_size, 1）
@@ -470,6 +529,23 @@ def validate_one_epoch(model, dataloader, criterion, config, epoch=None):
     
     avg_loss = total_loss / len(dataloader.dataset) if len(dataloader.dataset) > 0 else float('inf')
     
+    # 新增：计算验证NSE（按流域分别计算）
+    val_nse_dict = {}  # {basin_id: nse_value}
+    if basin_predictions:
+        for basin_id in basin_predictions:
+            if len(basin_predictions[basin_id]) > 0 and len(basin_observations[basin_id]) > 0:
+                pred_array = np.array(basin_predictions[basin_id])
+                obs_array = np.array(basin_observations[basin_id])
+                
+                # 计算NSE
+                obs_mean = np.mean(obs_array)
+                if obs_mean != 0 and len(obs_array) > 1:  # 避免除零和样本过少
+                    numerator = np.sum((obs_array - pred_array) ** 2)
+                    denominator = np.sum((obs_array - obs_mean) ** 2)
+                    if denominator != 0:
+                        nse = 1 - (numerator / denominator)
+                        val_nse_dict[basin_id] = nse
+    
     # 处理权重数据 - 计算每个流域的平均权重
     final_weights_data = {}
     for basin_id, weights_list in feature_weights_history.items():
@@ -483,6 +559,12 @@ def validate_one_epoch(model, dataloader, criterion, config, epoch=None):
         config.feature_weights_history = {}
     if epoch is not None:
         config.feature_weights_history[epoch] = final_weights_data
+    
+    # 将验证NSE数据存储到config中，用于后续绘图
+    if not hasattr(config, 'val_nse_history'):
+        config.val_nse_history = {}
+    if epoch is not None and val_nse_dict:
+        config.val_nse_history[epoch] = val_nse_dict
     
     # 使用utils.py中的可视化函数
     if epoch is not None and len(all_preds) > 0:
@@ -530,7 +612,7 @@ def validate_one_epoch(model, dataloader, criterion, config, epoch=None):
         except Exception as e:
             print(f"⚠️  可视化失败：{str(e)}")
     
-    return avg_loss
+    return avg_loss, val_nse_dict
 
 # ======================== 主训练流程（优化配置）=======================
 def train_sca2lstm(config, use_parallel=True, use_multithreading=True):
@@ -562,6 +644,10 @@ def train_sca2lstm(config, use_parallel=True, use_multithreading=True):
     train_losses_history = []
     val_losses_history = []
     
+    # 初始化NSE历史记录
+    train_nse_history = []
+    val_nse_history = []
+    
     # 创建带时间戳的可视化目录
     from datetime import datetime
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -584,9 +670,9 @@ def train_sca2lstm(config, use_parallel=True, use_multithreading=True):
         print(f"\n📌 Epoch {epoch+1}/{config.N_EPOCHS}")
         
         # 训练
-        train_loss = train_one_epoch(model, train_loader, criterion, optimizer, config)
+        train_loss, train_nse = train_one_epoch(model, train_loader, criterion, optimizer, config)
         # 验证
-        val_loss = validate_one_epoch(
+        val_loss, val_nse_dict = validate_one_epoch(
             model, val_loader, criterion, config, 
             epoch=epoch
         )
@@ -595,11 +681,22 @@ def train_sca2lstm(config, use_parallel=True, use_multithreading=True):
         train_losses_history.append(train_loss)
         val_losses_history.append(val_loss)
         
+        # 记录NSE历史
+        train_nse_history.append(train_nse)
+        
+        # 计算验证NSE平均值
+        if val_nse_dict:
+            val_nse_avg = np.mean(list(val_nse_dict.values()))
+            val_nse_history.append(val_nse_avg)
+        else:
+            val_nse_history.append(0.0)  # 如果没有验证NSE数据，添加0.0占位
+        
         # 学习率调度
         scheduler.step(val_loss)
         
-        # 打印日志
-        print(f"训练损失：{train_loss:.6f}，验证损失：{val_loss:.6f}")
+        # 打印日志（包含NSE指标）
+        val_nse_avg = val_nse_history[-1] if val_nse_history else 0.0
+        print(f"训练损失：{train_loss:.2f}，验证损失：{val_loss:.2f}，训练NSE：{train_nse:.2f}，验证NSE：{val_nse_avg:.2f}")
         print(f"当前学习率：{optimizer.param_groups[0]['lr']:.8f}")
         
         # 每5个epoch绘制一次损失曲线
@@ -609,6 +706,14 @@ def train_sca2lstm(config, use_parallel=True, use_multithreading=True):
                 print(f"📊 已更新损失曲线图")
             except Exception as e:
                 print(f"⚠️  损失曲线绘制失败: {str(e)}")
+        
+        # 每5个epoch绘制一次NSE曲线
+        if (epoch + 1) % 5 == 0 or epoch == config.N_EPOCHS - 1:
+            try:
+                plot_nse_curves(train_nse_history, val_nse_history, save_dir=viz_dir)
+                print(f"📊 已更新NSE曲线图")
+            except Exception as e:
+                print(f"⚠️  NSE曲线绘制失败: {str(e)}")
         
         # 早停逻辑
         if val_loss < best_val_loss - 1e-6:  # 增加微小阈值，避免浮点误差

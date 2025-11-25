@@ -1326,6 +1326,62 @@ def plot_loss_distribution(losses, epoch=None, save_dir=None, bins=30):
         print(f"❌ 绘制损失分布图失败: {str(e)}")
 
 
+def plot_nse_curves(train_nse_history, val_nse_history, save_dir=None, show_plot=False):
+    """
+    绘制训练和验证NSE曲线
+    
+    参数:
+    -----------
+    train_nse_history : list
+        训练NSE历史
+    val_nse_history : list
+        验证NSE历史
+    save_dir : str, optional
+        保存图像的目录
+    show_plot : bool, default=False
+        是否显示图像
+    """
+    try:
+        plt.figure(figsize=(12, 5))
+        
+        # 绘制NSE曲线
+        epochs = range(1, len(train_nse_history) + 1)
+        plt.plot(epochs, train_nse_history, 'g-', label='Training NSE', linewidth=2)
+        plt.plot(epochs, val_nse_history, 'orange', label='Validation NSE', linewidth=2)
+        
+        # 标记最佳验证NSE
+        if val_nse_history:
+            best_epoch = np.argmax(val_nse_history)  # NSE越大越好
+            best_nse = val_nse_history[best_epoch]
+            plt.scatter(best_epoch + 1, best_nse, c='orange', s=100, marker='*', 
+                       label=f'Best Validation NSE: {best_nse:.3f}')
+        
+        plt.title('Training and Validation NSE Curves', fontsize=14, fontweight='bold')
+        plt.xlabel('Epoch', fontsize=12)
+        plt.ylabel('Nash-Sutcliffe Efficiency (NSE)', fontsize=12)
+        plt.legend(fontsize=10)
+        plt.grid(True, alpha=0.3)
+        
+        # 设置Y轴范围（NSE通常在-1到1之间）
+        plt.ylim(-1, 1)
+        
+        plt.tight_layout()
+        
+        if save_dir:
+            os.makedirs(save_dir, exist_ok=True)
+            save_path = os.path.join(save_dir, 'nse_curves.png')
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"📊 NSE曲线已保存至: {save_path}")
+        
+        if show_plot:
+            plt.show()
+        else:
+            plt.close()
+            
+    except Exception as e:
+        print(f"❌ 绘制NSE曲线失败: {str(e)}")
+
+
 def plot_feature_weights_heatmap(feature_weights_history, feature_names=None, save_dir=None, show_plot=False):
     """
     绘制特征权重热力图，展示不同特征权重随训练轮数的变化
