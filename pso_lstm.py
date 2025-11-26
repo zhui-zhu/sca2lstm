@@ -39,14 +39,14 @@ def rmse(obs, sim):
                                             np.asarray(sim).flatten())))
 
 def bias_pct(obs, sim):
-    obs = np.asarray(obs).flatten()
-    sim = np.asarray(sim).flatten()
-    s_obs = np.sum(obs)
-    if s_obs == 0:
-        return np.nan
-    return float((np.sum(sim - obs) / s_obs) * 100.0)
-
-def bias_pct(obs, sim):
+    """
+    计算百分比偏差（Bias%）
+    Args:
+        obs: 观测值数组
+        sim: 模拟值数组
+    Returns:
+        bias_pct: 百分比偏差值
+    """
     obs = np.asarray(obs).flatten()
     sim = np.asarray(sim).flatten()
     s_obs = np.sum(obs)
@@ -77,7 +77,6 @@ def load_discharge_data(basin_id: str = "22001") -> Tuple[np.ndarray, pd.Datetim
     
     # 读取CSV文件
     df = pd.read_csv(csv_path, parse_dates=['date'])
-    df = df.sort_values('date')  # 按时间排序
     
     # 提取discharge_vol列和日期
     discharge_series = df['discharge_vol'].values
@@ -146,13 +145,13 @@ class RunoffLSTM(nn.Module):
         self.lstm = nn.LSTM(input_size=1,
                             hidden_size=hidden_size,
                             num_layers=num_layers,
-                            batch_first=True)
+                            batch_first=True) # 输入形状为 [B, T, 1]
         self.fc = nn.Linear(hidden_size, lead_time)  # 输出维度为lead_time
 
     def forward(self, x):
         # x: [B, T, 1]
         out, _ = self.lstm(x)      # [B, T, H]
-        out = out[:, -1, :]        # last time step
+        out = out[:, -1, :]        # last time step, [B, H]
         out = self.fc(out)         # [B, lead_time]
         return out
 
@@ -171,14 +170,16 @@ def train_eval_lstm(X_train, y_train, X_val, y_val,
     if y_val.ndim == 1:
         y_val = y_val.reshape(-1, 1)
 
+    # 创建训练集和验证集
     train_ds = TensorDataset(torch.tensor(X_train, dtype=torch.float32),
                              torch.tensor(y_train, dtype=torch.float32))
     val_ds   = TensorDataset(torch.tensor(X_val, dtype=torch.float32),
                              torch.tensor(y_val, dtype=torch.float32))
-
+    # 动态调整批量大小
     bs_train = max(4, min(batch_size, len(train_ds)))
     bs_val   = max(4, min(batch_size, len(val_ds)))
 
+    # 创建数据加载器
     train_loader = DataLoader(train_ds, batch_size=bs_train, shuffle=True, drop_last=False)
     val_loader   = DataLoader(val_ds,   batch_size=bs_val,   shuffle=False, drop_last=False)
 
@@ -516,7 +517,7 @@ def main():
     
     # 创建输出目录 - 使用不带冒号的时间格式
     current_time = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_output", f"{current_time}_{algo_name}")
+    output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_output", algo_name, f"{current_time}")
     os.makedirs(output_dir, exist_ok=True)
     
     log("INFO", f"开始运行 {algo_name} 算法")
