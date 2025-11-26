@@ -88,6 +88,13 @@ class HydrologyDataset(Dataset):
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
         original_rows = len(df)
         
+        # 🔍 调试：检查原始数据中的NaN
+        total_nan = df.isna().sum().sum()
+        if total_nan > 0:
+            print(f"📝 流域{basin_id}原始数据中有{total_nan}个NaN值")
+            nan_cols = df.isna().sum()[df.isna().sum() > 0]
+            print(f"   NaN分布: {dict(nan_cols)}")
+        
         # 过滤目标值NaN
         df = df.dropna(subset=["discharge_vol", self.target_col]).reset_index(drop=True)
         valid_rows = len(df)
@@ -107,6 +114,12 @@ class HydrologyDataset(Dataset):
             return None
         
         df.rename(columns={"catchment_id": "basin_id"}, inplace=True)
+        
+        # 🔍 调试：检查过滤后的数据
+        final_nan = df.isna().sum().sum()
+        if final_nan > 0:
+            print(f"📝 流域{basin_id}过滤后数据中有{final_nan}个NaN值")
+        
         return df
 
     def _load_all_basins_data(self) -> pd.DataFrame:
@@ -254,10 +267,25 @@ class HydrologyDataset(Dataset):
                 
                 # 填充特征NaN（用序列均值）
                 seq_features = df_seq[self.lstm2_features].copy()
-                for feat in self.lstm2_features:
-                    if seq_features[feat].isna().any():
-                        seq_features[feat].fillna(seq_features[feat].mean(), inplace=True)
+                
+                # 🔍 调试：检查NaN情况
+                nan_count = seq_features.isna().sum().sum()
+                if nan_count > 0:
+                    print(f"📝 流域{basin_id}样本{i}: 发现{nan_count}个NaN值，开始填充...")
+                    for feat in self.lstm2_features:
+                        if seq_features[feat].isna().any():
+                            feat_mean = seq_features[feat].mean()
+                            if pd.isna(feat_mean):  # 如果均值也是NaN
+                                feat_mean = 0.0  # 用0填充
+                                print(f"⚠️  警告：特征{feat}全为NaN，使用0填充")
+                            seq_features[feat].fillna(feat_mean, inplace=True)
+                
                 seq_features = seq_features.values.astype(np.float32)
+                
+                # 🔍 调试：检查转换后是否还有NaN
+                if np.isnan(seq_features).any():
+                    print(f"❌ 流域{basin_id}样本{i}: 转换后仍存在NaN！跳过此样本")
+                    continue
                 
                 lstm1_input = self._get_lstm1_input(df_seq)
                 missing_bool = (~np.isnan(df_seq[self.lstm2_features].values)).astype(np.float32)
@@ -393,13 +421,29 @@ class HydrologyDataset(Dataset):
                 # 特征处理（向量化优化）
                 seq_features_matrix = df_seq[lstm2_features].values.astype(np.float32)
                 
-                # NaN填充（向量化）
-                col_means = np.nanmean(seq_features_matrix, axis=0)
-                nan_mask = np.isnan(seq_features_matrix)
-                if np.any(nan_mask):
-                    # 使用向量化填充而不是循环
-                    row_indices, col_indices = np.where(nan_mask)
-                    seq_features_matrix[nan_mask] = col_means[col_indices]
+                # 🔍 调试：检查NaN情况
+                nan_count = np.isnan(seq_features_matrix).sum()
+                if nan_count > 0:
+                    print(f"📝 流域{basin_id}样本{i}: 发现{nan_count}个NaN值，开始填充...")
+                    
+                    # NaN填充（向量化）
+                    col_means = np.nanmean(seq_features_matrix, axis=0)
+                    nan_mask = np.isnan(seq_features_matrix)
+                    if np.any(nan_mask):
+                        # 检查是否有列全为NaN（均值也是NaN）
+                        all_nan_cols = np.isnan(col_means)
+                        if np.any(all_nan_cols):
+                            print(f"⚠️  警告：流域{basin_id}样本{i}有{np.sum(all_nan_cols)}个特征全为NaN，使用0填充")
+                            col_means[all_nan_cols] = 0.0  # 用0填充全NaN的列
+                        
+                        # 使用向量化填充而不是循环
+                        row_indices, col_indices = np.where(nan_mask)
+                        seq_features_matrix[nan_mask] = col_means[col_indices]
+                
+                # 🔍 调试：检查转换后是否还有NaN
+                if np.isnan(seq_features_matrix).any():
+                    print(f"❌ 流域{basin_id}样本{i}: 填充后仍存在NaN！跳过此样本")
+                    continue
                 
                 # LSTM1输入生成
                 time_encoding = np.stack([

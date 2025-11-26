@@ -419,6 +419,10 @@ def validate_one_epoch(model, dataloader, criterion, config, epoch=None):
     basin_predictions = {}  # {basin_id: []}
     basin_observations = {}  # {basin_id: []}
     
+    # 新增：收集反归一化后的数据用于绘图
+    all_preds_denorm = []
+    all_targets_denorm = []
+    
     prev_residual = torch.zeros(config.BATCH_SIZE, 1).to(config.DEVICE)  # 确保初始残差是2维
     
     with torch.no_grad():
@@ -488,15 +492,7 @@ def validate_one_epoch(model, dataloader, criterion, config, epoch=None):
                 # 计算真实损失（使用反归一化后的值）
                 loss = criterion(pred_denorm_tensor, target_denorm_tensor)
                 
-            except Exception as e:
-                # 如果反归一化失败，回退到使用归一化值计算损失
-                print(f"⚠️  验证阶段反归一化失败，使用归一化值计算损失：{str(e)}")
-                loss = criterion(pred, target)
-            
-            total_loss += loss.item() * current_batch_size
-            
-            # 新增：收集NSE计算数据（使用反归一化后的值）
-            try:
+                # 收集反归一化后的数据用于绘图和NSE计算
                 for i in range(current_batch_size):
                     basin_id = basin_ids[i].item()
                     if basin_id not in basin_predictions:
@@ -504,8 +500,17 @@ def validate_one_epoch(model, dataloader, criterion, config, epoch=None):
                         basin_observations[basin_id] = []
                     basin_predictions[basin_id].append(pred_denorm_tensor[i].item())
                     basin_observations[basin_id].append(target_denorm_tensor[i].item())
-            except:
-                # 如果反归一化失败，使用原始值
+                    
+                    # 收集反归一化后的数据用于绘图
+                    all_preds_denorm.append(pred_denorm_tensor[i].item())
+                    all_targets_denorm.append(target_denorm_tensor[i].item())
+                
+            except Exception as e:
+                # 如果反归一化失败，回退到使用归一化值计算损失和收集数据
+                print(f"⚠️  验证阶段反归一化失败，使用归一化值计算损失：{str(e)}")
+                loss = criterion(pred, target)
+                
+                # 收集原始值用于绘图和NSE计算
                 for i in range(current_batch_size):
                     basin_id = basin_ids[i].item()
                     if basin_id not in basin_predictions:
@@ -513,6 +518,10 @@ def validate_one_epoch(model, dataloader, criterion, config, epoch=None):
                         basin_observations[basin_id] = []
                     basin_predictions[basin_id].append(pred[i].item())
                     basin_observations[basin_id].append(target[i].item())
+                    
+                    # 收集原始值用于绘图
+                    all_preds_denorm.append(pred[i].item())
+                    all_targets_denorm.append(target[i].item())
             
             # 更新残差
             current_residual = torch.abs(pred - target) / (target + 1e-8)
@@ -526,6 +535,8 @@ def validate_one_epoch(model, dataloader, criterion, config, epoch=None):
             all_preds.extend(pred.squeeze().cpu().numpy())
             all_targets.extend(target.squeeze().cpu().numpy())
             all_basin_ids.extend(basin_ids.cpu().numpy())  # 新增：收集流域ID
+            
+            total_loss += loss.item() * current_batch_size
     
     avg_loss = total_loss / len(dataloader.dataset) if len(dataloader.dataset) > 0 else float('inf')
     
@@ -577,14 +588,16 @@ def validate_one_epoch(model, dataloader, criterion, config, epoch=None):
             viz_dir = os.path.join('model_output', 'visualizations', timestamp)
             os.makedirs(viz_dir, exist_ok=True)
             
-            # 绘制预测对比图
+            # 绘制预测对比图（使用反归一化后的数据）
             plot_prediction_comparison(
-                pred_values=all_preds,
-                target_values=all_targets,
+                pred_values=all_preds_denorm,
+                target_values=all_targets_denorm,
                 basin_ids=all_basin_ids if 'all_basin_ids' in locals() else None,
                 epoch=epoch,
                 save_dir=viz_dir,
-                sample_size=50
+                sample_size=50,
+                start_date=getattr(config, 'PLOT_START_DATE', None),
+                end_date=getattr(config, 'PLOT_END_DATE', None)
             )
             
             # 每10个epoch绘制一次损失分布
@@ -761,6 +774,7 @@ def train_sca2lstm(config, use_parallel=True, use_multithreading=True):
     return best_model_path
 
 # ======================== 运行训练 ========================
+# python ./sca2lstm.py --start 2000-01-01 --end 2000-12-31 --epochs 10
 if __name__ == "__main__":
     import argparse
     
@@ -769,6 +783,8 @@ if __name__ == "__main__":
     parser.add_argument('--parallel', action='store_true', help='使用并行数据集（多线程/多进程）')
     parser.add_argument('--serial', action='store_true', help='使用串行数据集（默认）')
     parser.add_argument('--epochs', type=int, default=60, help='训练轮数')
+    parser.add_argument('--start', type=str, default='2000-01-01', help='绘图开始日期 (YYYY-MM-DD)')
+    parser.add_argument('--end', type=str, default='2000-12-31', help='绘图结束日期 (YYYY-MM-DD)')
     args = parser.parse_args()
     
     # 确定是否使用并行
@@ -795,6 +811,10 @@ if __name__ == "__main__":
     try:
         # 更新配置中的epochs参数
         config.N_EPOCHS = args.epochs
+        # 添加绘图日期范围参数
+        config.PLOT_START_DATE = args.start
+        config.PLOT_END_DATE = args.end
+        
         best_model_path = train_sca2lstm(
             config, 
             use_parallel=use_parallel,

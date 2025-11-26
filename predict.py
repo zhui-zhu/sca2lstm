@@ -272,6 +272,9 @@ def predict_basin_flow(model, config, basin_id, num_samples=50):
     # 随机选择一些样本进行预测展示
     sample_indices = np.random.choice(len(dataset), min(num_samples, len(dataset)), replace=False)
     
+    # 获取该流域的缩放参数
+    discharge_min, discharge_max = get_discharge_scaler_params(str(basin_id), config.DATA_INPUT_DIR)
+    
     with torch.no_grad():
         for idx in tqdm(sample_indices, desc="预测进度"):
             # 获取数据
@@ -296,12 +299,16 @@ def predict_basin_flow(model, config, basin_id, num_samples=50):
             pred_value = prediction.cpu().numpy().flatten()[0]
             target_value = target.cpu().numpy().flatten()[0] if isinstance(target, torch.Tensor) else target
             
+            # 对预测值和真实值进行反归一化处理
+            pred_value_denorm = denormalize_discharge(pred_value, discharge_min, discharge_max)
+            target_value_denorm = denormalize_discharge(target_value, discharge_min, discharge_max)
+            
             # 获取日期（从数据集样本中提取）
             sample_data = dataset.samples[idx]
             date = sample_data.get('date', dataset.data.iloc[idx]['date'] if hasattr(dataset, 'data') else None)
             
-            all_predictions.append(pred_value)
-            all_actuals.append(target_value)
+            all_predictions.append(pred_value_denorm)
+            all_actuals.append(target_value_denorm)
             all_dates.append(date)
     
     # 创建结果DataFrame
@@ -346,7 +353,7 @@ def plot_water_level_comparison(results_df, basin_id, output_dir=None):
                     label='Error Area')
     
     ax1.set_xlabel('Date', fontsize=12)
-    ax1.set_ylabel('Flow Rate', fontsize=12)
+    ax1.set_ylabel('Discharge (m³/s)', fontsize=12)
     ax1.set_title('Time Series Comparison', fontsize=14)
     ax1.legend(fontsize=12)
     ax1.grid(True, alpha=0.3)
@@ -363,8 +370,8 @@ def plot_water_level_comparison(results_df, basin_id, output_dir=None):
     ax2.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, 
             label='Perfect Prediction Line')
     
-    ax2.set_xlabel('Actual Flow', fontsize=12)
-    ax2.set_ylabel('Predicted Flow', fontsize=12)
+    ax2.set_xlabel('Actual Flow (m³/s)', fontsize=12)
+    ax2.set_ylabel('Predicted Flow (m³/s)', fontsize=12)
     ax2.set_title('Predicted vs Actual Scatter Plot', fontsize=14)
     ax2.legend(fontsize=12)
     ax2.grid(True, alpha=0.3)
@@ -468,6 +475,9 @@ def predict_continuous_flow(model, config, basin_id, start_date, end_date):
     
     print(f"📊 Processing {len(target_data)} days of data from {start_date.date()} to {end_date.date()}")
     
+    # 获取该流域的缩放参数
+    discharge_min, discharge_max = get_discharge_scaler_params(str(basin_id), config.DATA_INPUT_DIR)
+    
     # Prepare results storage
     all_predictions = []
     all_actuals = []
@@ -535,9 +545,13 @@ def predict_continuous_flow(model, config, basin_id, start_date, end_date):
                     prediction = model(seq_features, lstm1_input, missing_bool, basin_ids, residual, return_weights=False)
                     pred_value = prediction.cpu().numpy().flatten()[0]
                     
+                    # 对预测值和真实值进行反归一化处理
+                    pred_value_denorm = denormalize_discharge(pred_value, discharge_min, discharge_max)
+                    actual_value_denorm = denormalize_discharge(actual_value, discharge_min, discharge_max)
+                    
                     # Store results
-                    all_predictions.append(pred_value)
-                    all_actuals.append(actual_value)
+                    all_predictions.append(pred_value_denorm)
+                    all_actuals.append(actual_value_denorm)
                     all_dates.append(current_date)
                     
                     # Update working data with prediction for next iterations

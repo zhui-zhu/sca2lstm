@@ -1248,27 +1248,27 @@ def plot_prediction_comparison(pred_values, target_values, basin_ids=None, epoch
         
         plt.figure(figsize=(12, 5))
         
-        # 绘制对比图
-        plt.plot(dates, target_array, 'b-', label='True Values', linewidth=2, marker='o', markersize=4)
-        plt.plot(dates, pred_array, 'r--', label='Predictions', linewidth=2, marker='s', markersize=4)
+        # 绘制对比图 - 使用不间断曲线，仅颜色区分
+        plt.plot(dates, target_array, color='blue', label='True Values', linewidth=2.5)
+        plt.plot(dates, pred_array, color='red', label='Predictions', linewidth=2.5)
         
         # 根据数据点数量自动调整x轴标签显示频率
         n_points = len(dates)
         if n_points <= 30:
-            # 数据点少，显示所有日期
-            plt.gca().xaxis.set_major_locator(mdates.DayLocator(interval=max(1, n_points//10)))
-            date_format = '%Y-%m-%d'
+            # 数据点少，每3天显示一个日期
+            plt.gca().xaxis.set_major_locator(mdates.DayLocator(interval=max(1, n_points//5)))
+            date_format = '%m-%d'
         elif n_points <= 90:
-            # 中等数量，每周显示一个日期
-            plt.gca().xaxis.set_major_locator(mdates.WeekdayLocator(byweekday=mdates.MO))
+            # 中等数量，每2周显示一个日期
+            plt.gca().xaxis.set_major_locator(mdates.WeekdayLocator(byweekday=mdates.MO, interval=2))
             date_format = '%m-%d'
         elif n_points <= 365:
-            # 大量数据，每月显示一个日期
-            plt.gca().xaxis.set_major_locator(mdates.MonthLocator())
+            # 大量数据，每2个月显示一个日期
+            plt.gca().xaxis.set_major_locator(mdates.MonthLocator(interval=2))
             date_format = '%m-%d'
         else:
-            # 超多数据，每季度显示一个日期
-            plt.gca().xaxis.set_major_locator(mdates.MonthLocator(interval=3))
+            # 超多数据，每半年显示一个日期
+            plt.gca().xaxis.set_major_locator(mdates.MonthLocator(interval=6))
             date_format = '%Y-%m'
             
         plt.gca().xaxis.set_major_formatter(mdates.DateFormatter(date_format))
@@ -1288,7 +1288,7 @@ def plot_prediction_comparison(pred_values, target_values, basin_ids=None, epoch
         plt.grid(True, alpha=0.3)
         
         # 自动旋转日期标签以避免重叠
-        plt.gcf().autofmt_xdate()
+        plt.gcf().autofmt_xdate(rotation=45, ha='right')
         
         # 计算并显示误差指标
         if len(pred_array) == len(target_array):
